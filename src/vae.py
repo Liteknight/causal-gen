@@ -94,6 +94,8 @@ class Encoder(nn.Module):
             end = stage.index("d") if "d" in stage else None
             n_blocks = int(stage[start:end])
 
+            print("HVAE Encoder: ", args.input_channels)
+
             if i == 0:  # define network stem
                 if n_blocks == 0 and "d" not in stage:
                     print("Using stride=2 conv encoder stem.")
@@ -145,47 +147,50 @@ class DecoderBlock(nn.Module):
         self.q_correction = args.q_correction
         k = 3 if self.res > 2 else 1
 
+        # Adjust the input channels for the prior
+        prior_in_channels = in_width + args.context_dim if self.cond_prior else in_width
         self.prior = Block(
-            (in_width + args.context_dim if self.cond_prior else in_width),
+            prior_in_channels,
             bottleneck,
             2 * self.z_dim + in_width,
             kernel_size=k,
             residual=False,
             version=args.vr,
         )
+
         if self.stochastic:
+            # Adjust the input channels for the posterior
+            posterior_in_channels = 2 * in_width + args.context_dim
             self.posterior = Block(
-                2 * in_width + args.context_dim,
+                posterior_in_channels,
                 bottleneck,
                 2 * self.z_dim,
                 kernel_size=k,
                 residual=False,
                 version=args.vr,
             )
+
         self.z_proj = nn.Conv2d(self.z_dim + args.context_dim, in_width, 1)
-        if not self.q_correction:  # for no posterior correction
+        if not self.q_correction:
             self.z_feat_proj = nn.Conv2d(self.z_dim + in_width, out_width, 1)
         self.conv = Block(
             in_width, bottleneck, out_width, kernel_size=k, version=args.vr
         )
 
-    def forward_prior(
-        self, z: Tensor, pa: Optional[Tensor] = None, t: Optional[float] = None
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+    def forward_prior(self, z: Tensor, pa: Optional[Tensor] = None, t: Optional[float] = None) -> Tuple[
+        Tensor, Tensor, Tensor]:
         if self.cond_prior:
             z = torch.cat([z, pa], dim=1)
         z = self.prior(z)
         p_loc = z[:, : self.z_dim, ...]
-        p_logscale = z[:, self.z_dim : 2 * self.z_dim, ...]
-        p_features = z[:, 2 * self.z_dim :, ...]
+        p_logscale = z[:, self.z_dim: 2 * self.z_dim, ...]
+        p_features = z[:, 2 * self.z_dim:, ...]
         if t is not None:
             p_logscale = p_logscale + torch.tensor(t).to(z.device).log()
         return p_loc, p_logscale, p_features
 
-    def forward_posterior(
-        self, z: Tensor, x: Tensor, pa: Tensor, t: Optional[float] = None
-    ) -> Tuple[Tensor, Tensor]:
-        h = torch.cat([z, pa, x], dim=1)
+    def forward_posterior(self, z: Tensor, x: Tensor, pa: Tensor, t: Optional[float] = None) -> Tuple[Tensor, Tensor]:
+        h = torch.cat([z, x, pa], dim=1)
         q_loc, q_logscale = self.posterior(h).chunk(2, dim=1)
         if t is not None:
             q_logscale = q_logscale + torch.tensor(t).to(z.device).log()
@@ -227,6 +232,10 @@ class Decoder(nn.Module):
         abduct: bool = False,
         latents: List[Tensor] = [],
     ) -> Tuple[Tensor, List[Dict[str, Tensor]]]:
+        print("Decoder input parents shape:", parents.shape)
+        if x is not None:
+            print("Decoder input x shapes:", {k: v.shape for k, v in x.items()})
+
         # learnt params for each resolution r
         bias = {r.shape[2]: r for r in self.bias}
         h = z = bias[1].repeat(parents.shape[0], 1, 1, 1)  # initial state
@@ -437,8 +446,13 @@ class HVAE(nn.Module):
         # self.register_buffer("log2", torch.tensor(2.0).log())
 
     def forward(self, x: Tensor, parents: Tensor, beta: int = 1) -> Dict[str, Tensor]:
+        print("Input x shape:", x.shape)
+        print("Input parents shape:", parents.shape)
         acts = self.encoder(x)
+        print("Encoder output shapes:", {k: v.shape for k, v in acts.items()})
         h, stats = self.decoder(parents=parents, x=acts)
+        print("Decoder output shape:", h.shape)
+
         nll_pp = self.likelihood.nll(h, x)
         if self.free_bits > 0:
             free_bits = torch.tensor(self.free_bits).type_as(nll_pp)

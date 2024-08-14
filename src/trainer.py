@@ -59,6 +59,8 @@ def trainer(
                     )(args.iter)
                 writer.add_scalar("train/beta_kl", args.beta, args.iter)
 
+                print("trainer.py: ", batch['x'].shape)
+
                 out = model(batch["x"], batch["pa"], beta=args.beta)
                 out["elbo"] = out["elbo"] / args.accu_steps
                 out["elbo"].backward()

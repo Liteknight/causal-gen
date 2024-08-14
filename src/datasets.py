@@ -66,13 +66,17 @@ class UKBBDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Tensor]:
         sample = {k: v[idx] for k, v in self.samples.items()}
 
+        # print(int(sample["eid"].item()))
+        # print(self.df.iloc[int(sample["eid"].item())]['filename'])
+
         if self.return_x:
-            mri_seq = "T1" if sample["mri_seq"] == 0.0 else "T2_FLAIR"
+            mri_seq = "T1" #if sample["mri_seq"] == 0.0 else "T2_FLAIR"
             # Load scan
             filename = (
-                f'{int(sample["eid"])}_' + mri_seq + "_unbiased_brain_rigid_to_mni.png"
+                # f'{int(sample["eid"])}_' + mri_seq + "_unbiased_brain_rigid_to_mni.png"
+                self.df.iloc[int(sample["eid"].item())]['filename']
             )
-            x = Image.open(os.path.join(self.root, "thumbs_192x192", filename))
+            x = Image.open(os.path.join(self.root, filename))
 
             if self.transform is not None:
                 sample["x"] = self.transform(x)
